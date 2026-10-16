@@ -1,7 +1,7 @@
 {
   "version": 1,
   "settings": {
-    "title": "墨迹123",
+    "title": "墨迹",
     "subtitle": "记录思考、代码与生活",
     "author": "站长",
     "description": "一个用纯前端写成的博客系统：没有服务端，没有数据库，数据就存在你的浏览器里。",
