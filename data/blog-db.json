@@ -89,6 +89,22 @@
       "createdAt": "2026-10-16T02:48:21.753Z",
       "updatedAt": "2026-10-16T02:48:21.753Z",
       "views": 42
+    },
+    {
+      "id": "post_mvadbmk9icti",
+      "title": "草稿：关于长期主义的碎片想法",
+      "slug": "draft-long-termism",
+      "category": "随笔",
+      "tags": [
+        "随笔"
+      ],
+      "status": "published",
+      "cover": "",
+      "summary": "还没写完，先放着。",
+      "content": "## 待整理\n\n1. 复利的前提是不要中断\n2. 中断的成本远高于慢速前进\n3. 所以要做的是降低单次启动成本\n\n（这篇还是草稿，只有登录后台才看得到。）",
+      "createdAt": "2026-10-16T02:48:21.753Z",
+      "updatedAt": "2026-10-16T08:29:05.465Z",
+      "views": 0
     }
   ]
 }
