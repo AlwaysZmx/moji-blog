@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "settings": {
+    "title": "墨迹",
+    "subtitle": "记录思考、代码与生活",
+    "author": "站长",
+    "description": "一个用纯前端写成的博客系统：没有服务端，没有数据库，数据就存在你的浏览器里。",
+    "footer": "© 2026 墨迹 · 由纯前端驱动",
+    "icp": "",
+    "pageSize": 6,
+    "theme": "light"
+  },
+  "categories": [
+    "技术",
+    "随笔",
+    "阅读"
+  ],
+  "tags": [
+    "JavaScript",
+    "前端",
+    "Markdown",
+    "随笔",
+    "效率"
+  ],
+  "posts": [
+    {
+      "id": "post_mvadcrvgarop",
+      "title": "test123",
+      "slug": "test123",
+      "category": "随笔",
+      "tags": [
+        "JavaScript"
+      ],
+      "status": "published",
+      "cover": "",
+      "summary": "123123",
+      "content": "# Hello\n## world",
+      "createdAt": "2026-10-16T02:49:15.292Z",
+      "updatedAt": "2026-10-16T02:49:15.292Z",
+      "views": 2
+    },
+    {
+      "id": "post_mvadbmk9yccd",
+      "title": "用纯前端搭一个博客：整体思路",
+      "slug": "pure-frontend-blog",
+      "category": "技术",
+      "tags": [
+        "前端",
+        "JavaScript"
+      ],
+      "status": "published",
+      "cover": "",
+      "summary": "没有服务器、没有数据库，只靠一个 HTML 文件加浏览器存储，能不能跑起一个像样的博客？可以。",
+      "content": "# 为什么是纯前端\n\n传统博客至少需要三样东西：**服务器**、**数据库**、**渲染层**。\n而纯前端方案把这三点全部搬进了浏览器：\n\n1. 页面就是静态文件，扔到任何地方都能打开；\n2. 数据存在 `localStorage` 里，离线也能读写；\n3. 渲染由 JavaScript 完成，不需要任何构建工具。\n\n> 代价也很明确：内容只属于当前浏览器，换设备就要靠导入导出。\n\n## 分层设计\n\n整个系统只有三层，边界很清楚：\n\n| 层 | 文件 | 职责 |\n| --- | --- | --- |\n| 数据层 | `store.js` | 增删改查、统计、导入导出 |\n| 渲染层 | `markdown.js` | 把 Markdown 变成安全的 HTML |\n| 视图层 | `app.js` / `admin.js` | 路由、界面、交互 |\n\n## 一行代码都不用装\n\n```js\n// 发布一篇文章只有一步\nBlog.savePost({\n  title: \"你好，世界\",\n  content: \"# 标题\\n\\n正文\",\n  status: \"published\"\n});\n```\n\n## 它适合谁\n\n- 想写点东西、又不想折腾服务器的人\n- 需要一个**演示用**后台的技术同学\n- 想读一份能一口气看完的完整前端源码的人\n\n---\n\n接下来我会把几个具体的坑单独写一篇。",
+      "createdAt": "2026-10-16T02:48:21.753Z",
+      "updatedAt": "2026-10-16T02:48:21.753Z",
+      "views": 129
+    },
+    {
+      "id": "post_mvadbmk9jgtp",
+      "title": "localStorage 当数据库的一些坑",
+      "slug": "localstorage-pitfalls",
+      "category": "技术",
+      "tags": [
+        "JavaScript",
+        "前端"
+      ],
+      "status": "published",
+      "cover": "",
+      "summary": "容量、同步、序列化、隐私模式——把浏览器存储当数据库用之前，最好先知道这几件事。",
+      "content": "## 1. 它是同步 API\n\n`localStorage` 是**同步**阻塞的，写入大数据时会卡主线程。\n所以千万不要每次输入都存一次，要做**防抖**。\n\n```js\nlet timer = null;\nfunction saveLater(data) {\n  clearTimeout(timer);\n  timer = setTimeout(() => save(data), 400);\n}\n```\n\n## 2. 容量大约 5MB\n\n不同浏览器略有差异，但量级都是 5MB 上下：\n\n- 存文本绰绰有余；\n- 把图片转成 base64 塞进去，几篇就爆了。\n\n> 正确做法：图片走外链或对象存储，数据库里只留 URL。\n\n## 3. 隐私模式会直接抛异常\n\nSafari 无痕模式下 `setItem` 会抛 `QuotaExceededError`。\n所以任何一次读写都必须包在 `try/catch` 里 —— 本项目的做法是**内存兜底**：\n\n| 情况 | 表现 | 处理 |\n| --- | --- | --- |\n| 正常 | 数据持久化 | 直接读写 |\n| 隐私模式 | 写入抛错 | 退回内存，提示用户 |\n| 手动清空 | 数据丢失 | 用导出功能备份 |\n\n## 4. 换设备 = 从零开始\n\n这是纯前端方案绕不开的限制，只能靠**导出 / 导入 JSON** 来兜底。\n养成习惯：写完一批内容就导出一次。",
+      "createdAt": "2026-10-16T02:48:21.753Z",
+      "updatedAt": "2026-10-16T02:48:21.753Z",
+      "views": 86
+    },
+    {
+      "id": "post_mvadbmk9iymd",
+      "title": "我的 2026 阅读清单",
+      "slug": "reading-list-2026",
+      "category": "阅读",
+      "tags": [
+        "随笔",
+        "效率"
+      ],
+      "status": "published",
+      "cover": "",
+      "summary": "今年打算读的书，以及一个已经验证有效的笨办法：每月只允许自己买一本。",
+      "content": "## 年度目标\n\n- [x] 一月：《代码整洁之道》\n- [x] 三月：《暗时间》\n- [ ] 五月：《设计数据密集型应用》\n- [ ] 八月：《人类简史》\n- [ ] 十一月：《禅与摩托车维修艺术》\n\n## 一个笨办法\n\n**每月只允许买一本。**\n\n买书太容易了，读书太难了。限制购买速度，反而逼着自己把手里的书读完。\n\n## 记录方式\n\n| 书名 | 状态 | 评分 |\n| --- | :---: | ---: |\n| 代码整洁之道 | 已读完 | 9 |\n| 暗时间 | 已读完 | 8 |\n| 设计数据密集型应用 | 在读 | — |\n\n> 读不完也没关系，关键是要留下痕迹。",
+      "createdAt": "2026-10-16T02:48:21.753Z",
+      "updatedAt": "2026-10-16T02:48:21.753Z",
+      "views": 42
+    }
+  ]
+}
