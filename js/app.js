@@ -398,10 +398,12 @@
           '<tr><th>总字数</th><td>约 ' + st.words.toLocaleString() + ' 字</td></tr>' +
         '</tbody></table></div>' +
         '<h2>技术说明</h2>' +
-        '<p>这是一个<strong>纯前端</strong>博客系统：没有服务端、没有数据库，' +
-        '所有内容保存在浏览器的 <code>localStorage</code> 中，Markdown 在本地实时渲染。</p>' +
-        '<blockquote><p>因此内容只属于当前浏览器。换设备或清理浏览器数据前，' +
-        '请到 <a href="admin.html">管理后台</a> 的「数据备份」里导出 JSON。</p></blockquote>' +
+        '<p>这是一个<strong>纯静态</strong>博客系统：页面由 HTML + CSS + JavaScript 组成，' +
+        '没有传统数据库。已发布的文章保存在一个 JSON 文件里，' +
+        '通过 <code>/api/db</code> 读写，Markdown 在浏览器端实时渲染。</p>' +
+        '<blockquote><p>所以同一批文章在任何设备、任何浏览器上都能看到。' +
+        '没写完的草稿只留在写它的那台电脑上，' +
+        '在 <a href="admin.html">管理后台</a> 里点「保存」并设为已发布后才会同步出去。</p></blockquote>' +
       '</div></div>';
     return { html: html, nav: 'about', title: '关于 · ' + s.title };
   }
@@ -460,12 +462,12 @@
 
   /* ---------------- 头部交互 ---------------- */
 
+  // 主题只是访客的本机偏好，不改站点设置、也不触发任何写操作
   document.getElementById('themeBtn').addEventListener('click', function () {
     var cur = document.documentElement.getAttribute('data-theme');
     var next = cur === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
     try { localStorage.setItem('dshm_blog_theme', next); } catch (e) { /* ignore */ }
-    Blog.updateSettings({ theme: next });
     toast(next === 'dark' ? '已切换到深色模式' : '已切换到浅色模式');
   });
 
@@ -506,7 +508,7 @@
 
   /* ---------------- 启动 ---------------- */
 
-  function boot() {
+  function boot(sync) {
     var s = Blog.getSettings();
     document.getElementById('brandName').textContent = s.title;
     document.getElementById('footerText').textContent = s.footer;
@@ -523,9 +525,17 @@
 
     if (!Blog.isStorageOK()) {
       view.insertAdjacentHTML('afterbegin',
-        '<div class="notice">当前浏览器禁用了本地存储（可能是隐私模式），你的修改不会被持久化，刷新后会丢失。</div>');
+        '<div class="notice">当前浏览器禁用了本地存储（可能是隐私模式），本机读到的内容无法缓存。</div>');
+    }
+
+    // 云端拿不到数据时如实说明，不要让访客以为看到的就是最新内容
+    if (sync && sync.checked && !sync.remote) {
+      view.insertAdjacentHTML('afterbegin',
+        '<div class="notice">云端数据暂时不可用，当前显示的是本机缓存的内容。' +
+        (sync.error ? '原因：' + esc(sync.error) : '') + '</div>');
     }
   }
 
-  boot();
+  // 必须等数据层把云端内容合并完再渲染，否则会先闪一下本机的旧数据
+  Blog.ready().then(boot, function () { boot(null); });
 })();

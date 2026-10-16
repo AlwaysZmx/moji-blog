@@ -5,7 +5,6 @@
   'use strict';
 
   var esc = Markdown.escapeHtml;
-  var AUTH_KEY = 'dshm_blog_auth';
   var DRAFT_KEY = 'dshm_blog_editor_draft';
 
   var loginView = document.getElementById('loginView');
@@ -20,6 +19,18 @@
 
   var dirty = false;
   var editingId = null;
+  var DEFAULT_PWD_KEY = 'dshm_blog_default_pwd';
+  var pendingDefaultPassword = false;
+  try { pendingDefaultPassword = sessionStorage.getItem(DEFAULT_PWD_KEY) === '1'; } catch (e) { /* ignore */ }
+
+  function setPendingDefaultPassword(v) {
+    pendingDefaultPassword = !!v;
+    try {
+      if (v) sessionStorage.setItem(DEFAULT_PWD_KEY, '1');
+      else sessionStorage.removeItem(DEFAULT_PWD_KEY);
+    } catch (e) { /* ignore */ }
+  }
+
   var listState = { q: '', status: 'all', category: '', page: 1, pageSize: 10 };
 
   /* ============================================================
@@ -167,35 +178,90 @@
      ============================================================ */
 
   function isAuthed() {
-    try { return sessionStorage.getItem(AUTH_KEY) === '1'; } catch (e) { return false; }
+    return Blog.isAuthed();
   }
 
-  function setAuthed(v) {
-    try {
-      if (v) sessionStorage.setItem(AUTH_KEY, '1');
-      else sessionStorage.removeItem(AUTH_KEY);
-    } catch (e) { /* ignore */ }
+  function reportSave(r, okMsg) {
+    if (r && r.ok && r.synced) {
+      if (okMsg) toast(okMsg, 'ok');
+      return true;
+    }
+    if (r && r.ok && r.offline) {
+      toast((okMsg || '已保存') + '（仅本机：云端不可用）', 'err');
+      return true;
+    }
+    if (r && r.ok) {
+      if (okMsg) toast(okMsg, 'ok');
+      return true;
+    }
+    toast('保存失败：' + (r && r.error ? r.error.message : '未知错误') + '（本机已生效，云端未同步）', 'err');
+    return false;
   }
+
+  var loggingIn = false;
 
   document.getElementById('loginForm').addEventListener('submit', function (e) {
     e.preventDefault();
+    if (loggingIn) return;
+
     var input = document.getElementById('pwdInput');
     var tip = document.getElementById('pwdTip');
-    if (Blog.login(input.value)) {
-      setAuthed(true);
+    var btn = document.querySelector('#loginForm button[type="submit"]');
+
+    loggingIn = true;
+    if (btn) { btn.disabled = true; btn.textContent = '登录中…'; }
+    tip.textContent = '';
+
+    Blog.login(input.value).then(function (res) {
+      loggingIn = false;
+      if (btn) { btn.disabled = false; btn.textContent = '登录'; }
+
+      if (!res.ok) {
+        tip.innerHTML = '<span style="color:var(--danger)">' +
+          esc(res.error ? res.error.message : '密码不正确，请重试。') + '</span>';
+        input.select();
+        return;
+      }
+
       input.value = '';
-      tip.textContent = '';
+      setPendingDefaultPassword(!!res.isDefaultPassword);
       enterApp();
       toast('欢迎回来', 'ok');
-    } else {
-      tip.innerHTML = '<span style="color:var(--danger)">密码不正确，请重试。</span>';
-      input.select();
-    }
+      afterAuth(false);
+    });
   });
+
+  /**
+   * 登录成功后的收尾：
+   *   - 云端还是空的，就把本机已有内容整体搬上去（首次部署的迁移路径）；
+   *   - 本机有云端没有的文章，交给顶部提示条让用户自己决定，绝不悄悄覆盖。
+   */
+  function afterAuth(isBoot) {
+    var st = Blog.syncState();
+
+    if (!st.available) {
+      if (!isBoot) toast('云端接口不可用，你的修改只会保存在本机', 'err');
+      return;
+    }
+
+    if (!st.exists) {
+      Blog.pushLocal('chore(blog): 首次同步本机文章到云端').then(function (r) {
+        if (r.ok) toast('已把本机内容同步到云端', 'ok');
+        else toast('同步失败：' + (r.error ? r.error.message : '未知错误'), 'err');
+        render();
+      });
+      return;
+    }
+
+    if (st.pendingCount > 0 && !isBoot) {
+      toast('本机有 ' + st.pendingCount + ' 篇已发布文章不在云端，可在上方提示条里上传', 'err');
+      render();
+    }
+  }
 
   document.getElementById('logoutBtn').addEventListener('click', function () {
     function doLogout() {
-      setAuthed(false);
+      Blog.logout();
       dirty = false;
       writeDraft(null);
       appView.hidden = true;
@@ -251,7 +317,7 @@
     taxonomy: '分类与标签',
     settings: '站点设置',
     backup: '数据备份',
-    account: '修改密码'
+    account: '密码与同步'
   };
 
   function render() {
@@ -280,18 +346,66 @@
       };
     }
 
-    view.innerHTML = result.html;
+    view.innerHTML = syncBanner() + result.html;
     view.className = 'content' + (result.narrow ? ' narrow' : '');
     pageTitle.textContent = result.title || NAV_TITLE[result.nav] || '管理后台';
     document.title = pageTitle.textContent + ' · 墨迹';
     highlightNav(result.nav);
     sidebar.classList.remove('open');
 
+    var pushBtn = document.getElementById('pushLocalBtn');
+    if (pushBtn) pushBtn.addEventListener('click', onPushLocal);
+
     var st = Blog.stats();
     topHint.textContent = st.total + ' 篇文章 · ' + st.published + ' 已发布 / ' + st.drafts + ' 草稿';
     document.getElementById('badgePosts').textContent = st.total;
 
     if (result.after) result.after();
+  }
+
+  /**
+   * 每个后台页面顶部的同步状态提示。
+   * 目的很明确：绝不让用户以为「保存成功 = 别的电脑也能看到」，除非真的推上去了。
+   */
+  function syncBanner() {
+    var st = Blog.syncState();
+
+    if (!st.checked) return '';
+
+    if (!st.available) {
+      return '<div class="notice err"><b>云端没有连上</b>：' + esc(st.error || '未知原因') +
+        '<br>现在保存的文章只留在本机浏览器，换一台电脑看不到。' +
+        '请检查 Vercel 的 <code>GITHUB_TOKEN</code> / <code>GITHUB_REPO</code> 环境变量后重新部署。</div>';
+    }
+
+    if (st.dirty) {
+      return '<div class="notice err"><b>有改动没能同步到云端</b>：' + esc(st.error || '未知原因') +
+        '<br>改动已经在本机生效，云端修好后重新保存一次即可。</div>';
+    }
+
+    if (st.pendingCount > 0) {
+      return '<div class="notice"><b>本机有 ' + st.pendingCount + ' 篇已发布文章不在云端</b>：' +
+        esc(st.pendingTitles.join('、')) +
+        '<button class="btn sm" id="pushLocalBtn" style="margin-left:10px">上传到云端</button></div>';
+    }
+
+    if (pendingDefaultPassword) {
+      return '<div class="notice err"><b>你还在使用默认密码 admin123</b>：' +
+        '任何人都能用它改写你的博客。请到 Vercel → Settings → Environment Variables ' +
+        '修改 <code>ADMIN_PASSWORD</code>，然后重新部署。</div>';
+    }
+
+    return '';
+  }
+
+  function onPushLocal() {
+    var btn = document.getElementById('pushLocalBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '上传中…'; }
+    Blog.pushLocal().then(function (r) {
+      if (r.ok) toast('已上传到云端', 'ok');
+      else toast('上传失败：' + (r.error ? r.error.message : '未知错误'), 'err');
+      render();
+    });
   }
 
   function highlightNav(nav) {
@@ -308,8 +422,19 @@
 
   function viewDashboard() {
     var st = Blog.stats();
-    var storageNote = Blog.isStorageOK() ? '' :
-      '<div class="notice">当前浏览器禁用了本地存储（可能是隐私模式）。数据只存在内存里，请尽快到「数据备份」导出，或关闭无痕模式。</div>';
+    var sync = Blog.syncState();
+
+    var storageNote = '';
+    if (!Blog.isStorageOK()) {
+      storageNote += '<div class="notice">当前浏览器禁用了本地存储（可能是隐私模式）。内容只存在内存里，' +
+        '请尽快到「数据备份」导出，或关闭无痕模式。</div>';
+    }
+    if (sync.available && sync.exists && !sync.dirty) {
+      storageNote += '<div class="notice ok">已连接云端：已发布的文章保存在仓库里，' +
+        '换任意一台电脑打开都能看到同一批内容。' +
+        (sync.lastSyncAt ? '（本次会话最近同步 ' + fmtDateTime(new Date(sync.lastSyncAt).toISOString()) + '）' : '') +
+        '</div>';
+    }
 
     var html = storageNote;
 
@@ -501,14 +626,15 @@
   function onDeletePost(id) {
     var p = Blog.getPost(id);
     if (!p) return;
-    confirmAction('删除文章', '「' + p.title + '」将被永久删除，此操作不可撤销。', function () {
-      Blog.deletePost(id);
-      toast('已删除', 'ok');
-      render();
+    confirmAction('删除文章', '「' + p.title + '」将被永久删除（云端也会一起删除），此操作不可撤销。', function () {
+      Blog.deletePost(id).then(function (r) {
+        reportSave(r, '已删除');
+        render();
+      });
     }, true);
   }
 
-  function onToggleStatus(id) {
+  function applyStatusToggle(id) {
     var p = Blog.getPost(id);
     if (!p) return;
     var next = p.status === 'draft' ? 'published' : 'draft';
@@ -522,9 +648,27 @@
       cover: p.cover,
       summary: p.summary,
       content: p.content
+    }).then(function (r) {
+      reportSave(r, next === 'published' ? '已发布，其他设备现在也能看到了' : '已转为草稿（只保留在本机）');
+      render();
     });
-    toast(next === 'published' ? '已发布' : '已转为草稿', 'ok');
-    render();
+  }
+
+  function onToggleStatus(id) {
+    var p = Blog.getPost(id);
+    if (!p) return;
+
+    // 下架 = 从云端移除，其他设备上就再也看不到了（本机还会留一份草稿），所以先确认
+    if (p.status === 'published') {
+      confirmAction(
+        '下架这篇文章？',
+        '「' + p.title + '」会从云端移除，其他设备上不再显示；本机仍会保留一份草稿。',
+        function () { applyStatusToggle(id); }
+      );
+      return;
+    }
+
+    applyStatusToggle(id);
   }
 
   /* ============================================================
@@ -753,7 +897,12 @@
         fTitle.focus();
         return;
       }
-      var saved = Blog.savePost({
+
+      var isNew = !post;
+      var btn = document.getElementById('saveBtn');
+      if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+
+      Blog.savePost({
         id: post ? post.id : null,
         title: fTitle.value,
         slug: fSlug.value,
@@ -763,18 +912,30 @@
         cover: fCover.value,
         summary: fSummary.value,
         content: mdInput.value
-      });
+      }).then(function (r) {
+        if (btn) { btn.disabled = false; btn.textContent = '💾 保存文章'; }
 
-      if (!post) writeDraft(null);
-      dirty = false;
+        var saved = r.value;
+        if (!saved || !saved.id) {
+          toast('保存失败：' + (r.error ? r.error.message : '未知错误'), 'err');
+          return;
+        }
 
-      if (!post) {
-        location.hash = '#/editor/' + saved.id;
-      } else {
+        if (isNew) writeDraft(null);
+        dirty = false;
         post = saved;
-        render();
-      }
-      toast('已保存' + (saved.status === 'published' ? '并发布' : '（草稿）'), 'ok');
+
+        reportSave(r, '已保存' + (saved.status === 'published'
+          ? '并发布，其他设备现在也能看到'
+          : '（草稿，只保留在本机）'));
+
+        if (isNew) {
+          // 让地址栏从 #/editor/new 变成 #/editor/<id>，这样继续编辑就是改同一篇
+          location.hash = '#/editor/' + saved.id;
+        } else {
+          render();
+        }
+      });
     }
 
     document.getElementById('saveBtn').addEventListener('click', save);
@@ -798,12 +959,13 @@
     var delBtn = document.getElementById('delBtn');
     if (delBtn) {
       delBtn.addEventListener('click', function () {
-        confirmAction('删除文章', '「' + fTitle.value + '」将被永久删除，此操作不可撤销。', function () {
-          Blog.deletePost(post.id);
-          dirty = false;
-          toast('已删除', 'ok');
-          location.hash = '#/posts';
-          render();
+        confirmAction('删除文章', '「' + fTitle.value + '」将被永久删除（云端也会一起删除），此操作不可撤销。', function () {
+          Blog.deletePost(post.id).then(function (r) {
+            dirty = false;
+            reportSave(r, '已删除');
+            location.hash = '#/posts';
+            render();
+          });
         }, true);
       });
     }
@@ -908,18 +1070,20 @@
         function addCat() {
           var v = newCat.value.trim();
           if (!v) return;
-          Blog.addCategory(v);
           newCat.value = '';
-          toast('已添加分类「' + v + '」', 'ok');
-          render();
+          Blog.addCategory(v).then(function (r) {
+            reportSave(r, '已添加分类「' + v + '」');
+            render();
+          });
         }
         function addTag() {
           var v = newTag.value.trim().replace(/^#/, '');
           if (!v) return;
-          Blog.addTag(v);
           newTag.value = '';
-          toast('已添加标签「' + v + '」', 'ok');
-          render();
+          Blog.addTag(v).then(function (r) {
+            reportSave(r, '已添加标签「' + v + '」');
+            render();
+          });
         }
 
         document.getElementById('addCat').addEventListener('click', addCat);
@@ -940,22 +1104,25 @@
                   input: true,
                   value: cat,
                   onConfirm: function (v) {
-                    Blog.renameCategory(cat, v.trim());
-                    toast('已重命名', 'ok');
-                    render();
+                    Blog.renameCategory(cat, v.trim()).then(function (r) {
+                      reportSave(r, '已重命名');
+                      render();
+                    });
                   }
                 });
               } else if (act === 'del-cat') {
                 confirmAction('删除分类', '「' + cat + '」将从文章上移除（文章本身保留）。', function () {
-                  Blog.deleteCategory(cat);
-                  toast('已删除', 'ok');
-                  render();
+                  Blog.deleteCategory(cat).then(function (r) {
+                    reportSave(r, '已删除');
+                    render();
+                  });
                 }, true);
               } else if (act === 'del-tag') {
                 confirmAction('删除标签', '「' + tag + '」会从所有文章中移除。', function () {
-                  Blog.deleteTag(tag);
-                  toast('已删除', 'ok');
-                  render();
+                  Blog.deleteTag(tag).then(function (r) {
+                    reportSave(r, '已删除');
+                    render();
+                  });
                 }, true);
               }
             });
@@ -1016,19 +1183,22 @@
             icp: document.getElementById('siteIcp').value.trim(),
             pageSize: parseInt(document.getElementById('sitePageSize').value, 10) || 6,
             theme: document.getElementById('siteTheme').value
+          }).then(function (r) {
+            reportSave(r, '设置已保存');
+            render();
           });
-          toast('设置已保存', 'ok');
-          render();
         });
 
         document.getElementById('resetAll').addEventListener('click', function () {
-          confirmAction('恢复演示数据', '当前所有文章、分类、标签和设置都会被清空并替换为演示数据，无法撤销。建议先导出备份。', function () {
-            Blog.reset();
-            dirty = false;
-            writeDraft(null);
-            toast('已恢复演示数据', 'ok');
-            location.hash = '#/dashboard';
-            render();
+          confirmAction('恢复演示数据', '当前所有文章、分类、标签和设置都会被清空并替换为演示数据，' +
+            '云端数据也会一起被覆盖，无法撤销。建议先导出备份。', function () {
+            Blog.reset().then(function (r) {
+              dirty = false;
+              writeDraft(null);
+              reportSave(r, '已恢复演示数据');
+              location.hash = '#/dashboard';
+              render();
+            });
           }, true);
         });
       }
@@ -1051,17 +1221,19 @@
     var html = '';
 
     html += '<div class="card"><h2>导出备份</h2>' +
-      '<p class="desc">把全部数据（' + st.total + ' 篇文章、' + st.categories + ' 个分类、' +
-      st.tags + ' 个标签及站点设置）导出成一个 JSON 文件。换设备、换浏览器时用它恢复。</p>' +
+      '<p class="desc">把本机全部数据（' + st.total + ' 篇文章、' + st.categories + ' 个分类、' +
+      st.tags + ' 个标签及站点设置）导出成一个 JSON 文件。用于整站搬家或误操作后回滚。</p>' +
       '<div class="btn-row">' +
         '<button class="btn primary" id="doExport">⬇ 导出 JSON 文件</button>' +
         '<button class="btn" id="doCopy">复制到剪贴板</button>' +
       '</div>' +
-      '<div class="tip" style="margin-top:10px;color:var(--muted);font-size:12.5px">导出内容包含站点设置中的密码散列，请勿随意公开。</div>' +
+      '<div class="tip" style="margin-top:10px;color:var(--muted);font-size:12.5px">' +
+      '导出的是<strong>本机</strong>数据，包含尚未发布的草稿；已发布的文章同时存放在云端仓库里。</div>' +
       '</div>';
 
     html += '<div class="card"><h2>导入数据</h2>' +
-      '<p class="desc">选择一个之前导出的 JSON 文件，或直接粘贴内容。<strong>导入会覆盖当前全部数据。</strong></p>' +
+      '<p class="desc">选择一个之前导出的 JSON 文件，或直接粘贴内容。' +
+      '<strong>导入会覆盖当前全部数据，并且会同步覆盖云端。</strong></p>' +
       '<div class="field"><label for="importFile">从文件导入</label>' +
         '<input type="file" id="importFile" accept=".json,application/json">' +
         '<div class="tip">选择文件后会先校验格式，确认后才覆盖。</div></div>' +
@@ -1102,17 +1274,21 @@
         });
 
         function doImport(text) {
-          confirmAction('导入并覆盖', '当前全部数据将被导入的内容替换，无法撤销。建议先导出当前备份。', function () {
+          confirmAction('导入并覆盖', '当前全部数据（含云端）将被导入的内容替换，无法撤销。建议先导出当前备份。', function () {
+            var pending;
             try {
-              Blog.importJSON(text);
-              dirty = false;
-              writeDraft(null);
-              toast('导入成功', 'ok');
-              location.hash = '#/dashboard';
-              render();
+              pending = Blog.importJSON(text);
             } catch (err) {
               toast(err.message, 'err');
+              return;
             }
+            pending.then(function (r) {
+              dirty = false;
+              writeDraft(null);
+              reportSave(r, '导入成功');
+              location.hash = '#/dashboard';
+              render();
+            });
           }, true);
         }
 
@@ -1142,54 +1318,67 @@
   }
 
   /* ============================================================
-     视图：修改密码
+     视图：密码与同步
      ============================================================ */
 
   function viewAccount() {
-    var html = '<div class="card"><h2>修改管理密码</h2>' +
-      '<p class="desc">密码只作用于本机浏览器，用于防止他人随手打开你的后台。' +
-      '它保存在本地的散列值中，<strong>忘记密码后只能清空浏览器数据重置</strong>。</p>' +
-      '<div class="field"><label for="oldPwd">当前密码</label>' +
-        '<input type="password" id="oldPwd" autocomplete="current-password"></div>' +
-      '<div class="field"><label for="newPwd">新密码</label>' +
-        '<input type="password" id="newPwd" autocomplete="new-password">' +
-        '<div class="tip">至少 4 位。</div></div>' +
-      '<div class="field"><label for="newPwd2">确认新密码</label>' +
-        '<input type="password" id="newPwd2" autocomplete="new-password"></div>' +
-      '<div class="btn-row"><button class="btn primary" id="doChangePwd">保存新密码</button></div>' +
+    var sync = Blog.syncState();
+
+    var html = '<div class="card"><h2>管理密码</h2>' +
+      '<p class="desc">密码由服务端保管，校验只发生在接口层，浏览器里既不存明文也不存散列。' +
+      '所以它<strong>不能在这个页面上修改</strong>，只能改环境变量。</p>' +
+      '<div class="mono">' +
+      '1. 打开 Vercel 控制台 → 你的项目 → Settings → Environment Variables\n' +
+      '2. 新增或修改 ADMIN_PASSWORD（建议 12 位以上的随机字符串）\n' +
+      '3. 保存后到 Deployments，把最新一次部署 Redeploy 一次\n' +
+      '4. 改完之后所有已登录的会话立即失效，需要重新登录' +
+      '</div>' +
+      (pendingDefaultPassword
+        ? '<div class="notice err" style="margin-top:14px">当前还在用默认密码 <code>' +
+          esc(Blog.DEFAULT_PASSWORD) + '</code>，任何人都能用它改写你的博客，请尽快按上面的步骤替换。</div>'
+        : '') +
+      '</div>';
+
+    html += '<div class="card"><h2>云端同步</h2>' +
+      '<p class="desc">已发布的文章保存在仓库里的 JSON 文件中，所有设备读的是同一份数据。</p>' +
+      '<div class="mono">' +
+      '接口状态: ' + (sync.available ? '正常' : '不可用 — ' + (sync.error || '未知原因')) + '\n' +
+      '云端数据: ' + (sync.exists ? '已存在' : '尚未创建（下次保存时自动创建）') + '\n' +
+      '本机未同步的改动: ' + (sync.dirty ? '有' : '无') + '\n' +
+      '本机待上传文章: ' + sync.pendingCount + ' 篇\n' +
+      '本次会话最近同步: ' + (sync.lastSyncAt ? fmtDateTime(new Date(sync.lastSyncAt).toISOString()) : '—') +
+      '</div>' +
+      '<div class="btn-row" style="margin-top:14px">' +
+        '<button class="btn" id="reloadCloud">↻ 重新从云端拉取</button>' +
+      '</div>' +
+      '<div class="tip" style="margin-top:10px;color:var(--muted);font-size:12.5px">' +
+      '草稿只保存在本机，不会上传。要让别的电脑看到，请把文章设为「已发布」再保存。</div>' +
       '</div>';
 
     html += '<div class="card"><h2>关于这个后台</h2>' +
-      '<p class="desc">纯前端实现，没有服务端。数据全部保存在浏览器 localStorage 中。</p>' +
-      '<div class="mono">localStorage key: dshm_blog_db_v1\n' +
-      '存储可用: ' + (Blog.isStorageOK() ? '是' : '否（隐私模式？）') + '\n' +
-      '默认密码: ' + Blog.DEFAULT_PASSWORD + '</div>' +
+      '<p class="desc">静态前端 + 两个 Serverless 接口，没有传统数据库。</p>' +
+      '<div class="mono">' +
+      '本机缓存 key: dshm_blog_db_v1\n' +
+      '本机存储可用: ' + (Blog.isStorageOK() ? '是' : '否（隐私模式？）') + '\n' +
+      '数据接口: /api/db（读公开，写需要登录）' +
+      '</div>' +
       '</div>';
 
     return {
       html: html,
       nav: 'account',
       narrow: true,
-      title: '修改密码',
+      title: '密码与同步',
       after: function () {
-        document.getElementById('doChangePwd').addEventListener('click', function () {
-          var o = document.getElementById('oldPwd').value;
-          var n = document.getElementById('newPwd').value;
-          var n2 = document.getElementById('newPwd2').value;
-
-          if (n !== n2) return toast('两次输入的新密码不一致', 'err');
-          if (n.length < 4) return toast('新密码至少 4 位', 'err');
-
-          try {
-            if (Blog.changePassword(o, n)) {
-              toast('密码已更新', 'ok');
-              render();
-            } else {
-              toast('当前密码不正确', 'err');
-            }
-          } catch (err) {
-            toast(err.message, 'err');
-          }
+        document.getElementById('reloadCloud').addEventListener('click', function () {
+          var btn = this;
+          btn.disabled = true;
+          btn.textContent = '拉取中…';
+          Blog.reload().then(function (s) {
+            if (s && s.remote) toast('已从云端重新加载', 'ok');
+            else toast('云端不可用：' + (s && s.error ? s.error : '未知原因'), 'err');
+            render();
+          });
         });
       }
     };
@@ -1213,16 +1402,46 @@
     }
   });
 
-  if (isAuthed()) {
-    enterApp();
-  } else {
+  function showLogin(tipHtml) {
     appView.hidden = true;
     loginView.hidden = false;
+    var tip = document.getElementById('pwdTip');
+    if (tip) tip.innerHTML = tipHtml || '';
     document.getElementById('pwdInput').focus();
   }
 
-  if (!Blog.isStorageOK()) {
-    document.getElementById('loginSub').innerHTML =
-      '<span style="color:var(--warn)">注意：浏览器禁用了本地存储，修改不会被保存。</span>';
+  function paintLoginHints() {
+    var sync = Blog.syncState();
+    var sub = document.getElementById('loginSub');
+
+    if (!Blog.isStorageOK()) {
+      sub.innerHTML = '<span style="color:var(--warn)">注意：浏览器禁用了本地存储，改动只会留在内存里。</span>';
+      return;
+    }
+    if (sync.checked && !sync.available) {
+      sub.innerHTML = '<span style="color:var(--warn)">云端接口不可用，登录后改动只会保存在本机。</span>' +
+        '<br>请输入管理密码继续';
+      return;
+    }
+    sub.textContent = '请输入管理密码继续';
   }
+
+  // 先立刻显示登录页，避免等接口期间白屏；随后再判断能不能直接进后台
+  showLogin('');
+
+  // 等数据层把云端内容合并进来，再决定进后台还是继续停在登录页
+  Blog.ready().then(function () {
+    paintLoginHints();
+
+    if (!isAuthed()) return;
+
+    Blog.checkAuth().then(function (ok) {
+      if (ok) {
+        enterApp();
+        afterAuth(true);
+      } else {
+        showLogin('<span style="color:var(--danger)">登录已过期，请重新登录。</span>');
+      }
+    });
+  });
 })();
