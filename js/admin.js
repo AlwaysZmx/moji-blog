@@ -689,6 +689,35 @@
     } catch (e) { /* ignore */ }
   }
 
+  /** 编辑器里的 AI 面板 */
+  function aiPanelHtml() {
+    return '' +
+      '<div class="ai-panel" id="aiPanel">' +
+        '<div class="ai-head">' +
+          '<span class="ai-badge">AI</span>' +
+          '<b>AI 助手</b>' +
+          '<span class="ai-sub">生成正文 · 生成标题 · 一键排版</span>' +
+        '</div>' +
+        '<div class="ai-input">' +
+          '<input type="text" id="aiTopic" placeholder="主题或提纲，例如：用 Vercel 部署静态博客常踩的三个坑">' +
+          '<select id="aiLength" title="生成正文的篇幅">' +
+            '<option value="short">短 · 约 600 字</option>' +
+            '<option value="medium" selected>中 · 约 1200 字</option>' +
+            '<option value="long">长 · 约 2000 字</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="btn-row ai-actions">' +
+          '<button type="button" class="btn sm primary" id="aiGenContent">✎ 生成正文</button>' +
+          '<button type="button" class="btn sm" id="aiGenTitle">T 生成标题</button>' +
+          '<button type="button" class="btn sm" id="aiGenFormat">≣ 一键排版</button>' +
+          '<span class="spacer"></span>' +
+          '<button type="button" class="btn sm ghost" id="aiUndo" hidden>↶ 撤销 AI 改动</button>' +
+        '</div>' +
+        '<div class="ai-status" id="aiStatus">先生成正文，再让它起标题；已有草稿时也可以直接排版。</div>' +
+        '<div class="ai-titles" id="aiTitles"></div>' +
+      '</div>';
+  }
+
   function viewEditor(id) {
     editingId = id;
     var post = id ? Blog.getPost(id) : null;
@@ -756,6 +785,8 @@
 
     html += '<div class="field"><label for="fSummary">摘要</label>' +
       '<textarea id="fSummary" rows="2" placeholder="留空则自动截取正文前 80 字" style="min-height:60px">' + esc(data.summary) + '</textarea></div>';
+
+    html += aiPanelHtml();
 
     html += '<div class="field" style="margin-bottom:6px"><label>正文（Markdown）</label></div>';
 
@@ -978,6 +1009,193 @@
         render();
         toast('草稿已丢弃');
       });
+    }
+
+    setupAiPanel();
+
+    /* ---------------- AI 助手 ---------------- */
+
+    function setupAiPanel() {
+      var topicEl = document.getElementById('aiTopic');
+      if (!topicEl) return;
+
+      var lengthEl = document.getElementById('aiLength');
+      var statusEl = document.getElementById('aiStatus');
+      var titlesEl = document.getElementById('aiTitles');
+      var undoBtn = document.getElementById('aiUndo');
+      var btnContent = document.getElementById('aiGenContent');
+      var btnTitle = document.getElementById('aiGenTitle');
+      var btnFormat = document.getElementById('aiGenFormat');
+      var allButtons = [btnContent, btnTitle, btnFormat];
+
+      var backup = null;   // 只保留一步撤销
+      var busy = false;
+
+      function setBusy(on, label) {
+        busy = on;
+        allButtons.forEach(function (b) { if (b) b.disabled = on; });
+        if (statusEl) {
+          statusEl.className = 'ai-status' + (on ? ' busy' : '');
+          statusEl.textContent = label || '';
+        }
+      }
+
+      function setStatus(msg, kind) {
+        if (!statusEl) return;
+        statusEl.className = 'ai-status' + (kind ? ' ' + kind : '');
+        statusEl.textContent = msg || '';
+      }
+
+      /** AI 会直接改写输入框，所以每次落笔前先存一份，留一步后悔药 */
+      function snapshot() {
+        backup = { title: fTitle.value, content: mdInput.value, summary: fSummary.value };
+        if (undoBtn) undoBtn.hidden = false;
+      }
+
+      function renderTitles(titles) {
+        if (!titlesEl) return;
+        titlesEl.innerHTML = titles.map(function (t) {
+          return '<button type="button" class="ai-chip" data-title="' + esc(t) + '">' + esc(t) + '</button>';
+        }).join('');
+      }
+
+      function call(action, payload, label) {
+        if (busy) return Promise.resolve(null);
+        setBusy(true, label);
+        return Blog.ai(action, payload).then(function (res) {
+          setBusy(false, '');
+          return res;
+        }, function (err) {
+          setBusy(false, '');
+          var msg = err && err.message ? err.message : '未知错误';
+          setStatus(msg, 'err');
+          toast('AI 调用失败：' + msg, 'err');
+          return null;
+        });
+      }
+
+      function generateTitles(topic, autoFill, skipSnapshot) {
+        return call('title', {
+          content: mdInput.value,
+          topic: topic || '',
+          count: 5
+        }, '正在生成标题…').then(function (res) {
+          if (!res || !res.titles || !res.titles.length) return;
+          renderTitles(res.titles);
+          if (autoFill) {
+            // 作为「生成正文」的收尾动作时不再存快照，
+            // 这样撤销一次就能回到生成之前，而不是只退掉标题
+            if (!skipSnapshot) snapshot();
+            fTitle.value = res.titles[0];
+            onInput();
+            setStatus('已填入标题，也可以从下面换一个');
+          } else {
+            setStatus('从下面挑一个标题');
+          }
+        });
+      }
+
+      if (undoBtn) {
+        undoBtn.addEventListener('click', function () {
+          if (!backup) return;
+          fTitle.value = backup.title;
+          mdInput.value = backup.content;
+          fSummary.value = backup.summary;
+          backup = null;
+          undoBtn.hidden = true;
+          onInput();
+          renderPreview();
+          setStatus('已还原到 AI 改动之前');
+        });
+      }
+
+      if (titlesEl) {
+        titlesEl.addEventListener('click', function (e) {
+          var chip = e.target.closest ? e.target.closest('.ai-chip') : null;
+          if (!chip) return;
+          var t = chip.getAttribute('data-title');
+          if (!t || t === fTitle.value) return;
+          snapshot();
+          fTitle.value = t;
+          onInput();
+          setStatus('已选用这个标题');
+        });
+      }
+
+      /* 生成正文 */
+      if (btnContent) {
+        btnContent.addEventListener('click', function () {
+          var raw = topicEl.value.trim();
+          if (!raw) {
+            topicEl.focus();
+            return toast('请先填写主题或提纲', 'err');
+          }
+
+          var doGenerate = function () {
+            var lines = raw.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+            call('content', {
+              topic: lines[0] || raw,
+              outline: lines.length > 1 ? lines.slice(1).join('\n') : '',
+              category: fCategory.value.trim(),
+              tags: fTags.value.trim(),
+              length: lengthEl ? lengthEl.value : 'medium'
+            }, '正在生成正文…通常需要 10–30 秒').then(function (res) {
+              if (!res || !res.text) return;
+              snapshot();
+              mdInput.value = res.text;
+              onInput();
+              renderPreview();
+              setStatus('已生成 ' + res.text.replace(/\s/g, '').length + ' 字，可以直接编辑');
+              toast('正文已生成', 'ok');
+
+              // 标题还空着就顺手起一个，省得再点一次
+              if (!fTitle.value.trim()) generateTitles(raw, true, true);
+            });
+          };
+
+          if (mdInput.value.trim()) {
+            confirmAction('覆盖当前正文？',
+              'AI 会重新生成整篇正文并替换现在的内容。可以用「撤销 AI 改动」还原一次。',
+              doGenerate);
+          } else {
+            doGenerate();
+          }
+        });
+      }
+
+      /* 生成标题 */
+      if (btnTitle) {
+        btnTitle.addEventListener('click', function () {
+          var topic = topicEl.value.trim();
+          if (!mdInput.value.trim() && !topic) {
+            return toast('请先写一点正文，或在上方填写主题', 'err');
+          }
+          generateTitles(topic, !fTitle.value.trim());
+        });
+      }
+
+      /* 一键排版 */
+      if (btnFormat) {
+        btnFormat.addEventListener('click', function () {
+          if (!mdInput.value.trim()) {
+            return toast('正文是空的，先用 AI 生成正文或自己写一点', 'err');
+          }
+          confirmAction('重新排版当前正文？',
+            'AI 只整理 Markdown 结构（标题层级、列表、表格、空行），不改动你的用词。' +
+            '原内容可以用「撤销 AI 改动」还原一次。',
+            function () {
+              call('format', { content: mdInput.value }, '正在排版…').then(function (res) {
+                if (!res || !res.text) return;
+                snapshot();
+                mdInput.value = res.text;
+                onInput();
+                renderPreview();
+                setStatus('排版完成，用词保持原样');
+                toast('排版完成', 'ok');
+              });
+            });
+        });
+      }
     }
   }
 

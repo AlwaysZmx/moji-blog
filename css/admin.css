@@ -476,6 +476,76 @@ table.data td.title-cell .slug {
 .prose .ta-center { text-align: center; }
 .prose .ta-right { text-align: right; }
 
+/* ---------------- AI 助手面板 ---------------- */
+
+.ai-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--accent-soft), var(--surface) 62%);
+  padding: 14px 16px;
+  margin: 4px 0 18px;
+}
+
+.ai-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.ai-head b { font-size: 14px; }
+
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+}
+
+.ai-sub { color: var(--muted); font-size: 12.5px; }
+
+.ai-input { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.ai-input input { flex: 1 1 300px; min-width: 0; }
+.ai-input select { flex: 0 0 auto; }
+
+.ai-actions { margin-bottom: 0; }
+
+.ai-status {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+  min-height: 18px;
+}
+.ai-status.busy { color: var(--accent); }
+.ai-status.err { color: var(--danger); }
+
+.ai-titles { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-titles:not(:empty) { margin-top: 10px; }
+
+.ai-chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  color: var(--text-soft);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.ai-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+@media (max-width: 720px) {
+  .ai-input select { flex: 1 1 100%; }
+}
+
 /* 提示条 */
 
 .notice {

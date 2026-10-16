@@ -1068,6 +1068,31 @@
     });
   }
 
+  /* ---------- AI 助手 ---------- */
+
+  /**
+   * 调用服务端的 AI 接口。模型密钥只存在服务端环境变量里，浏览器拿不到。
+   * AI 与 GitHub 配置相互独立：仓库没配好也不影响用 AI 写稿。
+   *
+   * @param {string} action 'content' | 'title' | 'format'
+   * @param {object} payload
+   * @returns {Promise<{text:string, titles?:string[], model?:string}>}
+   */
+  function ai(action, payload) {
+    var token = getToken();
+    if (!token || token === 'local') {
+      return Promise.reject(new Error('请先登录再使用 AI 功能'));
+    }
+    return apiFetch('ai', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify(Object.assign({ action: action }, payload || {}))
+    }, 90000);
+  }
+
   /* ---------- 导出 API ---------- */
 
   global.Blog = {
@@ -1083,6 +1108,7 @@
     reload: reload,
     syncState: syncState,
     pushLocal: pushLocal,
+    ai: ai,
     isRemote: function () { return remote.available; },
 
     // 登录
